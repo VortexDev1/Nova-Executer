@@ -1,0 +1,706 @@
+package com.executer.ui;
+
+import android.annotation.SuppressLint;
+import android.content.Context;
+import android.graphics.Color;
+import android.graphics.PixelFormat;
+import android.graphics.Typeface;
+import android.graphics.drawable.GradientDrawable;
+import android.text.Editable;
+import android.text.SpannableStringBuilder;
+import android.text.TextWatcher;
+import android.text.style.ForegroundColorSpan;
+import android.util.DisplayMetrics;
+import android.util.TypedValue;
+import android.view.Gravity;
+import android.view.View;
+import android.view.ViewTreeObserver;
+import android.view.WindowManager;
+import android.view.animation.TranslateAnimation;
+import android.view.inputmethod.EditorInfo;
+import android.widget.Button;
+import android.widget.CompoundButton;
+import android.widget.EditText;
+import android.widget.FrameLayout;
+import android.widget.HorizontalScrollView;
+import android.widget.LinearLayout;
+import android.widget.ScrollView;
+import android.widget.TextView;
+
+import com.android.support.Preferences;
+import com.executer.materials.CustomSwitch;
+import com.executer.materials.CustomDialog;
+import com.executer.materials.VortexText;
+
+import java.io.File;
+import java.util.ArrayList;
+import java.util.List;
+
+import static android.view.ViewGroup.LayoutParams.MATCH_PARENT;
+import android.widget.Toast;
+import android.content.SharedPreferences;
+
+public class Executer {
+
+    private static Executer instance;
+    private final Context context;
+    private final WindowManager windowManager;
+    private FrameLayout rootLayout;
+    private LinearLayout topTabsContainer;
+    private FrameLayout tabContentContainer;
+    private View tabHighlight;
+    private List<Button> tabButtons = new ArrayList<Button>();
+    private List<String> tabNames = new ArrayList<String>();
+
+    private FrameLayout codeTabContent;
+    private FrameLayout scriptsTabContent;
+    private FrameLayout settingsTabContent;
+    private FrameLayout creditsTabContent;
+
+    private EditText codeEditor;
+    private TextView lineCounter;
+    private Button executeButton;
+
+    private boolean isUpdating = false;
+
+    public OnCloseListener onCloseListener;
+    public OnExecuteListener onExecuteListener;
+    public OnLoadRuntimeListener onLoadRuntimeListener;
+
+    public interface OnCloseListener { void onClose(); }
+    public interface OnExecuteListener { void onExecute(String code); }
+    public interface OnLoadRuntimeListener { void onLoadRuntime(String code); }
+
+    private final String[] keywords = {
+            "function","end","local","if","then","else","for","in",
+            "or","and","not","return","while","do","repeat","until"
+    };
+
+    private final String[][] developers = {
+            {"VortexHacker","youtube.com/@vortexhacker1"},
+            {"HackerKing","youtube.com/@the.king.78"},
+    };
+
+    private Executer(Context ctx) {
+        this.context = ctx.getApplicationContext();
+        this.windowManager = (WindowManager) ctx.getSystemService(Context.WINDOW_SERVICE);
+        createUI();
+        VortexText.init(context);
+        VortexText.showText("BGNX Credits:VortexHacker (2.117.1)");
+    }
+
+    public static void init(Context context) {
+        if (instance == null) instance = new Executer(context);
+    }
+
+    public static Executer getInstance() {
+        if (instance == null) throw new IllegalStateException("Executer not initialized. Call Executer.init(context) first.");
+        return instance;
+    }
+
+    // Improved dp conversion that scales better for small screens
+    private int dp(int px) {
+        DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+        return (int) (px * metrics.density);
+    }
+
+    private int getScreenHeight() {
+        DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+        return metrics.heightPixels;
+    }
+
+    private int getScreenWidth() {
+        DisplayMetrics metrics = context.getResources().getDisplayMetrics();
+        return metrics.widthPixels;
+    }
+
+    // Get responsive text size in SP
+    private float getTextSizeSp(float baseSp) {
+        return baseSp;
+    }
+    
+
+    @SuppressLint("ClickableViewAccessibility")
+    private void createUI() {
+		SharedPreferences prefs = context.getSharedPreferences("bgnx.prefs", Context.MODE_PRIVATE);
+		String scriptName = prefs.getString("defaultScript", "VortexPS.lua");
+		String pkg = context.getPackageName();
+		String path = "/sdcard/BGNX/Scripts/" + scriptName;
+		Preferences.changeFeatureString("loadDefault", 29, path);
+		
+        rootLayout = new FrameLayout(context);
+        rootLayout.setLayoutParams(new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
+        rootLayout.setBackgroundColor(Color.parseColor("#1B1B1B"));
+
+        LinearLayout main = new LinearLayout(context);
+        main.setOrientation(LinearLayout.VERTICAL);
+        rootLayout.addView(main, new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
+
+        LinearLayout topBar = new LinearLayout(context);
+        topBar.setOrientation(LinearLayout.HORIZONTAL);
+        topBar.setGravity(Gravity.CENTER_VERTICAL);
+        topBar.setPadding(dp(8), dp(8), dp(8), dp(8));
+        main.addView(topBar, new LinearLayout.LayoutParams(MATCH_PARENT, dp(56)));
+
+        HorizontalScrollView tabsScroll = new HorizontalScrollView(context);
+        tabsScroll.setHorizontalScrollBarEnabled(false);
+        topTabsContainer = new LinearLayout(context);
+        topTabsContainer.setOrientation(LinearLayout.HORIZONTAL);
+        topTabsContainer.setGravity(Gravity.CENTER_VERTICAL);
+        tabsScroll.addView(topTabsContainer, new HorizontalScrollView.LayoutParams(MATCH_PARENT, MATCH_PARENT));
+        LinearLayout.LayoutParams tabsParams = new LinearLayout.LayoutParams(0, MATCH_PARENT, 1f);
+        topBar.addView(tabsScroll, tabsParams);
+
+        addTopTab("Code");
+        addTopTab("Scripts");
+        addTopTab("Settings");
+        addTopTab("Credits");
+
+        // Execute button next to tabs
+        executeButton = new Button(context);
+        executeButton.setText("▶");
+        executeButton.setAllCaps(false);
+        executeButton.setTextColor(Color.BLACK);
+        executeButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+        GradientDrawable execBg = new GradientDrawable();
+        execBg.setCornerRadius(dp(10));
+        execBg.setColor(Color.parseColor("#BB86FC"));
+        executeButton.setBackground(execBg);
+        LinearLayout.LayoutParams execLp = new LinearLayout.LayoutParams(dp(56), dp(40));
+        execLp.leftMargin = dp(8);
+        topBar.addView(executeButton, execLp);
+        executeButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                String code = codeEditor.getText().toString();
+                Preferences.changeFeatureString("Execute", 27, code);
+                if (onExecuteListener != null) onExecuteListener.onExecute(code);
+                if (settingsTabContent != null) {
+                    CustomSwitch closeSwitch = (CustomSwitch) settingsTabContent.findViewWithTag("switch_close_execute");
+                    if (closeSwitch != null && closeSwitch.isChecked()) {
+                        if (onCloseListener != null) onCloseListener.onClose();
+                        hideUI();
+                    }
+                }
+            }
+        });
+
+        Button closeButton = new Button(context);
+        closeButton.setText("✕");
+        closeButton.setAllCaps(false);
+        closeButton.setTextColor(Color.WHITE);
+        closeButton.setTextSize(TypedValue.COMPLEX_UNIT_SP, getTextSizeSp(16));
+        GradientDrawable closeBg = new GradientDrawable();
+        closeBg.setCornerRadius(dp(10));
+        closeBg.setColor(Color.parseColor("#FF5252"));
+        closeButton.setBackground(closeBg);
+        LinearLayout.LayoutParams closeLp = new LinearLayout.LayoutParams(dp(56), dp(40));
+        closeLp.leftMargin = dp(8);
+        topBar.addView(closeButton, closeLp);
+        closeButton.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                if (onCloseListener != null) onCloseListener.onClose();
+                hideUI();
+            }
+        });
+
+        FrameLayout hlWrap = new FrameLayout(context);
+        hlWrap.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, dp(4)));
+        tabHighlight = new View(context);
+        tabHighlight.setBackgroundColor(Color.parseColor("#BB86FC"));
+        FrameLayout.LayoutParams hlLp = new FrameLayout.LayoutParams(dp(80), dp(4));
+        hlLp.leftMargin = dp(8);
+        tabHighlight.setLayoutParams(hlLp);
+        hlWrap.addView(tabHighlight);
+        main.addView(hlWrap);
+
+        tabContentContainer = new FrameLayout(context);
+        tabContentContainer.setLayoutParams(new LinearLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
+        main.addView(tabContentContainer);
+
+        codeTabContent = createCodeTab();
+        scriptsTabContent = new FrameLayout(context);
+        scriptsTabContent.setBackgroundColor(Color.parseColor("#1B1B1B"));
+        setupScriptsTab();
+        settingsTabContent = new FrameLayout(context);
+        settingsTabContent.setBackgroundColor(Color.parseColor("#1B1B1B"));
+        setupSettingsTab();
+        creditsTabContent = new FrameLayout(context);
+        creditsTabContent.setBackgroundColor(Color.parseColor("#1B1B1B"));
+        setupCreditsTab();
+
+        tabContentContainer.addView(codeTabContent);
+        tabContentContainer.addView(scriptsTabContent);
+        tabContentContainer.addView(settingsTabContent);
+        tabContentContainer.addView(creditsTabContent);
+
+        showTopTab("Code");
+    }
+
+    private void addTopTab(String title) {
+        final Button tab = new Button(context);
+        tab.setText(title);
+        tab.setAllCaps(false);
+        tab.setTextColor(Color.WHITE);
+        tab.setTypeface(Typeface.DEFAULT_BOLD);
+        tab.setTextSize(TypedValue.COMPLEX_UNIT_SP, getTextSizeSp(14));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.TRANSPARENT);
+        bg.setCornerRadius(dp(8));
+        tab.setBackground(bg);
+        
+        // Responsive tab width
+        int tabWidth = getScreenWidth() / 5;
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(tabWidth, dp(40));
+        lp.leftMargin = dp(4);
+        lp.rightMargin = dp(4);
+        tab.setLayoutParams(lp);
+        
+        topTabsContainer.addView(tab);
+        tabButtons.add(tab);
+        tabNames.add(title);
+        tab.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) {
+                showTopTab(tab.getText().toString());
+            }
+        });
+    }
+    
+    private void showTopTab(final String title) {
+        if (title == null) return;
+        for (int i = 0; i < tabNames.size(); i++) {
+            String n = tabNames.get(i);
+            Button b = tabButtons.get(i);
+            if (n.equals(title)) {
+                b.setTextColor(Color.BLACK);
+                GradientDrawable selBg = new GradientDrawable();
+                selBg.setColor(Color.parseColor("#BB86FC"));
+                selBg.setCornerRadius(dp(8));
+                b.setBackground(selBg);
+                moveHighlightTo(b);
+            } else {
+                b.setTextColor(Color.WHITE);
+                GradientDrawable bg = new GradientDrawable();
+                bg.setColor(Color.TRANSPARENT);
+                bg.setCornerRadius(dp(8));
+                b.setBackground(bg);
+            }
+        }
+        codeTabContent.setVisibility(title.equals("Code") ? View.VISIBLE : View.GONE);
+        scriptsTabContent.setVisibility(title.equals("Scripts") ? View.VISIBLE : View.GONE);
+        settingsTabContent.setVisibility(title.equals("Settings") ? View.VISIBLE : View.GONE);
+        creditsTabContent.setVisibility(title.equals("Credits") ? View.VISIBLE : View.GONE);
+    }
+
+    private void moveHighlightTo(final View tabView) {
+        tabView.post(new Runnable() {
+            public void run() {
+                int[] parentLoc = new int[2];
+                int[] tabLoc = new int[2];
+                topTabsContainer.getLocationOnScreen(parentLoc);
+                tabView.getLocationOnScreen(tabLoc);
+                int relativeX = tabLoc[0] - parentLoc[0];
+                int width = tabView.getWidth();
+
+                FrameLayout.LayoutParams params = (FrameLayout.LayoutParams) tabHighlight.getLayoutParams();
+                int oldLeft = params.leftMargin;
+
+                int thickness = dp(3);
+
+                params.leftMargin = relativeX;
+                params.width = width;
+                params.height = thickness;
+                tabHighlight.setLayoutParams(params);
+
+                TranslateAnimation anim = new TranslateAnimation(oldLeft - relativeX, 0, 0, 0);
+                anim.setDuration(200);
+                anim.setFillAfter(true);
+                tabHighlight.startAnimation(anim);
+            }
+        });
+    }
+
+    private FrameLayout createCodeTab() {
+        FrameLayout layout = new FrameLayout(context);
+        layout.setBackgroundColor(Color.parseColor("#1B1B1B"));
+
+        LinearLayout verticalLayout = new LinearLayout(context);
+        verticalLayout.setOrientation(LinearLayout.VERTICAL);
+        verticalLayout.setPadding(dp(8), dp(8), dp(8), dp(8));
+        layout.addView(verticalLayout, new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
+
+        GradientDrawable editorBg = new GradientDrawable();
+        editorBg.setColor(Color.parseColor("#2D2D2D"));
+        editorBg.setCornerRadius(dp(16));
+
+        LinearLayout codeContainer = new LinearLayout(context);
+        codeContainer.setOrientation(LinearLayout.HORIZONTAL);
+        codeContainer.setBackground(editorBg);
+        codeContainer.setPadding(dp(10), dp(10), dp(10), dp(10));
+
+        // Code editor takes remaining space
+        LinearLayout.LayoutParams ccParams = new LinearLayout.LayoutParams(MATCH_PARENT, 0);
+        ccParams.weight = 1f;
+        codeContainer.setLayoutParams(ccParams);
+
+        lineCounter = new TextView(context);
+        lineCounter.setTextColor(Color.GRAY);
+        lineCounter.setText("1");
+        lineCounter.setPadding(dp(5), dp(5), dp(10), dp(5));
+        lineCounter.setTypeface(Typeface.MONOSPACE);
+        lineCounter.setGravity(Gravity.TOP);
+        lineCounter.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+
+        final ScrollView editorScroll = new ScrollView(context);
+        editorScroll.setFillViewport(true);
+        editorScroll.setBackground(null);
+
+        codeEditor = new EditText(context);
+        codeEditor.setBackground(null);
+        codeEditor.setTextColor(Color.WHITE);
+        codeEditor.setHint("add your lua code here...");
+        codeEditor.setSingleLine(false);
+        codeEditor.setGravity(Gravity.TOP | Gravity.START);
+        codeEditor.setHorizontallyScrolling(true);
+        codeEditor.setTypeface(Typeface.MONOSPACE);
+        codeEditor.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+        codeEditor.setImeOptions(EditorInfo.IME_FLAG_NO_EXTRACT_UI);
+        codeEditor.setFocusableInTouchMode(true);
+
+        editorScroll.addView(codeEditor);
+        codeContainer.addView(lineCounter);
+        codeContainer.addView(editorScroll, new LinearLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
+        verticalLayout.addView(codeContainer);
+
+        codeEditor.addTextChangedListener(new TextWatcher() {
+            private int lastCursor = 0;
+            public void beforeTextChanged(CharSequence s, int start, int count, int after) {
+                lastCursor = codeEditor.getSelectionStart();
+            }
+            public void onTextChanged(CharSequence s, int start, int before, int count) {}
+            public void afterTextChanged(Editable s) {
+                if (isUpdating) return;
+                isUpdating = true;
+                try {
+                    highlightSyntaxSafe(s);
+                    updateLineCountSafe();
+                    int safeCursor = Math.min(lastCursor, s.length());
+                    codeEditor.setSelection(safeCursor);
+                } catch (Exception e) {}
+                isUpdating = false;
+            }
+        });
+
+        editorScroll.getViewTreeObserver().addOnScrollChangedListener(new ViewTreeObserver.OnScrollChangedListener() {
+            public void onScrollChanged() {
+                lineCounter.scrollTo(0, editorScroll.getScrollY());
+            }
+        });
+
+        return layout;
+    }
+
+    private void highlightSyntaxSafe(Editable editable) {
+        SpannableStringBuilder ssb = new SpannableStringBuilder(editable);
+        String str = editable.toString();
+
+        ForegroundColorSpan[] spans = ssb.getSpans(0, ssb.length(), ForegroundColorSpan.class);
+        for (int i = 0; i < spans.length; i++) ssb.removeSpan(spans[i]);
+
+        for (int k = 0; k < keywords.length; k++) {
+            String kw = keywords[k];
+            int index = str.indexOf(kw);
+            while (index >= 0) {
+                boolean validWord = (index == 0 || !Character.isLetterOrDigit(str.charAt(index - 1))) &&
+                        (index + kw.length() >= str.length() || !Character.isLetterOrDigit(str.charAt(index + kw.length())));
+                if (validWord) {
+                    ssb.setSpan(new ForegroundColorSpan(Color.parseColor("#BB86FC")),
+                            index, index + kw.length(), 33);
+                }
+                index = str.indexOf(kw, index + kw.length());
+            }
+        }
+
+        int start = str.indexOf("\"");
+        while (start >= 0) {
+            int end = str.indexOf("\"", start + 1);
+            if (end < 0) break;
+            ssb.setSpan(new ForegroundColorSpan(Color.parseColor("#03DAC5")),
+                    start, end + 1, 33);
+            start = str.indexOf("\"", end + 1);
+        }
+
+        editable.replace(0, editable.length(), ssb);
+    }
+
+    private void updateLineCountSafe() {
+        int lines = codeEditor.getLineCount();
+        StringBuilder sb = new StringBuilder();
+        for (int i = 1; i <= lines; i++) sb.append(i).append("\n");
+        lineCounter.setText(sb.toString());
+    }
+
+    private void setupScriptsTab() {
+        LinearLayout layout = new LinearLayout(context);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(16), dp(16), dp(16), dp(16));
+
+        TextView title = new TextView(context);
+        title.setText("Scripts");
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        title.setTextColor(Color.WHITE);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setGravity(Gravity.CENTER_HORIZONTAL);
+        layout.addView(title);
+
+        ScrollView scrollView = new ScrollView(context);
+        LinearLayout scriptsContainer = new LinearLayout(context);
+        scriptsContainer.setOrientation(LinearLayout.VERTICAL);
+        scriptsContainer.setPadding(0, dp(10), 0, 0);
+        
+        File scriptsDir = new File("/storage/emulated/0/BGNX/Scripts");
+        if (scriptsDir.exists() && scriptsDir.isDirectory()) {
+            File[] files = scriptsDir.listFiles();
+            if (files != null && files.length > 0) {
+                LinearLayout rowLayout = null;
+                int buttonCount = 0;
+                
+                // Responsive column count (2-3 columns based on screen width)
+                int columnsPerRow = getScreenWidth() < dp(600) ? 2 : 3;
+                
+                for (int fi = 0; fi < files.length; fi++) {
+                    final File file = files[fi];
+                    if (file.isFile() && file.getName().endsWith(".lua")) {
+                        if (buttonCount % columnsPerRow == 0) {
+                            rowLayout = new LinearLayout(context);
+                            rowLayout.setOrientation(LinearLayout.HORIZONTAL);
+                            LinearLayout.LayoutParams rowParams = new LinearLayout.LayoutParams(MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+                            rowParams.topMargin = dp(8);
+                            scriptsContainer.addView(rowLayout, rowParams);
+                        }
+                        String fileName = file.getName();
+                        Button scriptBtn = createButton(fileName, "#2D2D2D", "#FFFFFF");
+                        scriptBtn.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11);
+                        scriptBtn.setEllipsize(android.text.TextUtils.TruncateAt.END);
+                        scriptBtn.setSingleLine(true);
+                        scriptBtn.setPadding(dp(4), dp(8), dp(4), dp(8));
+                        LinearLayout.LayoutParams btnParams = new LinearLayout.LayoutParams(0, dp(50), 1f);
+                        btnParams.setMargins(dp(4), 0, dp(4), 0);
+                        scriptBtn.setLayoutParams(btnParams);
+                        scriptBtn.setOnClickListener(new View.OnClickListener() {
+                            public void onClick(View v) {
+                                showScriptDialog(file);
+                            }
+
+                            private void showScriptDialog(final File file) {
+    CustomDialog dialog = new CustomDialog(context)
+        .setTitle("Load Scripts")
+        .setMessage("Choose an action for:\n" + file.getName())
+        .setLeftButton("Cancel", new CustomDialog.OnDialogButtonClickListener() {
+            @Override
+            public void onClick() {
+                // Simply dismiss
+            }
+        })
+        .setMiddleButton("Load", new CustomDialog.OnDialogButtonClickListener() {
+            @Override
+            public void onClick() {
+                String fullPath = file.getAbsolutePath(); // this is already a String
+                Preferences.changeFeatureString("LoadScript", 28, fullPath);
+                Toast.makeText(context, "Script loaded: " + file.getName(), Toast.LENGTH_SHORT).show();
+            }
+        })
+        .setRightButton("Start at Runtime", new CustomDialog.OnDialogButtonClickListener() {
+            @Override
+            public void onClick() {
+                SharedPreferences prefs = context.getSharedPreferences("bgnx.prefs", Context.MODE_PRIVATE);
+                SharedPreferences.Editor editor = prefs.edit();
+                editor.putString("defaultScript", file.getName());
+                editor.apply();
+                Toast.makeText(context, "Now This Script Starts When You Enter A Game", Toast.LENGTH_SHORT).show();
+            }
+        });
+
+    dialog.show();
+}
+                        });
+                        if (rowLayout != null) rowLayout.addView(scriptBtn);
+                        buttonCount++;
+                    }
+                }
+            } else {
+                TextView noScripts = new TextView(context);
+                noScripts.setText("No .lua scripts found\n\nAdd scripts to: /storage/emulated/0/BGNX/Scripts");
+                noScripts.setTextColor(Color.GRAY);
+                noScripts.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+                noScripts.setGravity(Gravity.CENTER);
+                noScripts.setPadding(dp(20), dp(20), dp(20), dp(20));
+                scriptsContainer.addView(noScripts);
+            }
+        } else {
+            TextView noScripts = new TextView(context);
+            noScripts.setText("No scripts found\n\nCreate folder: /storage/emulated/0/BGNX/Scripts");
+            noScripts.setTextColor(Color.GRAY);
+            noScripts.setTextSize(TypedValue.COMPLEX_UNIT_SP, 14);
+            noScripts.setGravity(Gravity.CENTER);
+            noScripts.setPadding(dp(20), dp(20), dp(20), dp(20));
+            scriptsContainer.addView(noScripts);
+        }
+
+        scrollView.addView(scriptsContainer);
+        layout.addView(scrollView, new LinearLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
+        scriptsTabContent.addView(layout);
+    }
+
+    private void setupSettingsTab() {
+        LinearLayout layout = new LinearLayout(context);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(16), dp(16), dp(16), dp(16));
+        layout.setLayoutParams(new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
+
+        TextView title = new TextView(context);
+        title.setText("Settings");
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        title.setTextColor(Color.WHITE);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setGravity(Gravity.CENTER_HORIZONTAL);
+        layout.addView(title);
+
+        LinearLayout closeLayout = new LinearLayout(context);
+        closeLayout.setOrientation(LinearLayout.HORIZONTAL);
+        closeLayout.setGravity(Gravity.CENTER_VERTICAL);
+        closeLayout.setPadding(0, dp(12), 0, dp(12));
+
+        TextView closeLabel = new TextView(context);
+        closeLabel.setText("Close after Execute");
+        closeLabel.setTextColor(Color.WHITE);
+        closeLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        LinearLayout.LayoutParams labelParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        closeLabel.setLayoutParams(labelParams);
+
+        CustomSwitch closeSwitch = new CustomSwitch(context);
+        closeSwitch.setTag("switch_close_execute");
+        closeLayout.addView(closeLabel);
+        closeLayout.addView(closeSwitch);
+        layout.addView(closeLayout);
+
+        LinearLayout fontLayout = new LinearLayout(context);
+        fontLayout.setOrientation(LinearLayout.HORIZONTAL);
+        fontLayout.setGravity(Gravity.CENTER_VERTICAL);
+        fontLayout.setPadding(0, dp(12), 0, dp(12));
+
+        TextView fontLabel = new TextView(context);
+        fontLabel.setText("Increase Font Size");
+        fontLabel.setTextColor(Color.WHITE);
+        fontLabel.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+        LinearLayout.LayoutParams fontLabelParams = new LinearLayout.LayoutParams(0, LinearLayout.LayoutParams.WRAP_CONTENT, 1f);
+        fontLabel.setLayoutParams(fontLabelParams);
+
+        CustomSwitch fontSwitch = new CustomSwitch(context);
+        fontSwitch.setTag("switch_font_size");
+        fontSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            public void onCheckedChanged(CompoundButton buttonView, boolean isChecked) {
+                if (isChecked) {
+                    codeEditor.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+                    lineCounter.setTextSize(TypedValue.COMPLEX_UNIT_SP, 15);
+                } else {
+                    codeEditor.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                    lineCounter.setTextSize(TypedValue.COMPLEX_UNIT_SP, 12);
+                }
+            }
+        });
+
+        fontLayout.addView(fontLabel);
+        fontLayout.addView(fontSwitch);
+        layout.addView(fontLayout);
+
+        settingsTabContent.addView(layout);
+    }
+
+    private void setupCreditsTab() {
+        LinearLayout layout = new LinearLayout(context);
+        layout.setOrientation(LinearLayout.VERTICAL);
+        layout.setPadding(dp(16), dp(16), dp(16), dp(16));
+        layout.setLayoutParams(new FrameLayout.LayoutParams(MATCH_PARENT, MATCH_PARENT));
+
+        TextView title = new TextView(context);
+        title.setText("Credits");
+        title.setTextSize(TypedValue.COMPLEX_UNIT_SP, 20);
+        title.setTextColor(Color.WHITE);
+        title.setTypeface(Typeface.DEFAULT_BOLD);
+        title.setGravity(Gravity.CENTER_HORIZONTAL);
+        layout.addView(title);
+
+        for (int i = 0; i < developers.length; i++) {
+            String[] dev = developers[i];
+            LinearLayout card = new LinearLayout(context);
+            card.setOrientation(LinearLayout.VERTICAL);
+            card.setPadding(dp(12), dp(12), dp(12), dp(12));
+
+            GradientDrawable bg = new GradientDrawable();
+            bg.setColor(Color.parseColor("#2D2D2D"));
+            bg.setCornerRadius(dp(14));
+            bg.setStroke(dp(2), Color.parseColor("#BB86FC"));
+            card.setBackground(bg);
+
+            TextView name = new TextView(context);
+            name.setText(dev[0]);
+            name.setTextColor(Color.parseColor("#BB86FC"));
+            name.setTextSize(TypedValue.COMPLEX_UNIT_SP, 16);
+            name.setTypeface(Typeface.DEFAULT_BOLD);
+            card.addView(name);
+
+            TextView yt = new TextView(context);
+            yt.setText(dev[1]);
+            yt.setTextColor(Color.parseColor("#03DAC5"));
+            yt.setTextSize(TypedValue.COMPLEX_UNIT_SP, 13);
+            card.addView(yt);
+
+            LinearLayout.LayoutParams params = new LinearLayout.LayoutParams(MATCH_PARENT, LinearLayout.LayoutParams.WRAP_CONTENT);
+            params.topMargin = dp(10);
+            layout.addView(card, params);
+        }
+
+        creditsTabContent.addView(layout);
+    }
+
+    private Button createButton(String text, String bgColor, String textColor) {
+        Button btn = new Button(context);
+        btn.setText(text);
+        btn.setAllCaps(false);
+        btn.setTextColor(Color.parseColor(textColor));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.parseColor(bgColor));
+        bg.setCornerRadius(dp(12));
+        btn.setBackground(bg);
+        return btn;
+    }
+
+    public void showUI() {
+        if (rootLayout.getParent() != null) return;
+        WindowManager.LayoutParams params = new WindowManager.LayoutParams(
+                MATCH_PARENT, MATCH_PARENT,
+                WindowManager.LayoutParams.TYPE_APPLICATION_OVERLAY,
+                WindowManager.LayoutParams.FLAG_NOT_TOUCH_MODAL | WindowManager.LayoutParams.FLAG_LAYOUT_IN_SCREEN,
+                PixelFormat.TRANSLUCENT
+        );
+        params.gravity = Gravity.CENTER;
+        windowManager.addView(rootLayout, params);
+        VortexText.removeText();
+    }
+
+    public void hideUI() {
+        if (rootLayout != null && rootLayout.getParent() != null)
+            windowManager.removeView(rootLayout);
+            VortexText.showText("Nova Executer Test");
+            VortexText.setOffsetX(20);
+        VortexText.setOffsetY(100);
+    }
+
+    public String getText() {
+        return codeEditor.getText().toString();
+    }
+
+    public void setText(String text) {
+        codeEditor.setText(text);
+    }
+}
